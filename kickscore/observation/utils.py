@@ -1,6 +1,6 @@
 import ctypes
 from collections.abc import Callable
-from math import erfc, exp, log, pi, sqrt  # Faster than numpy equivalents.
+from math import erfc, exp, expm1, log, log1p, pi, sqrt  # Faster than numpy equivalents.
 from typing import Any
 
 import numba
@@ -50,6 +50,18 @@ QS = np.array(
 
 SQRT2 = sqrt(2.0)
 SQRT2PI = sqrt(2.0 * pi)
+
+_GH_N = 30
+_GH_XS, _GH_WS = roots_hermitenorm(_GH_N)
+_GH_LWS = np.log(_GH_WS) - log(SQRT2PI)
+
+K_PROBIT_WIN = 1
+K_PROBIT_TIE = 2
+K_LOGIT_WIN = 3
+K_LOGIT_TIE = 4
+K_POISSON = 5
+K_SKELLAM = 6
+K_GAUSSIAN = 7
 
 
 @numba.jit(nopython=True)
@@ -165,3 +177,102 @@ def log_factorial(k: int) -> float:
 _addr = get_cython_function_address("scipy.special.cython_special", "__pyx_fuse_1iv")
 _type = ctypes.CFUNCTYPE(ctypes.c_double, ctypes.c_double, ctypes.c_double)
 iv = _type(_addr)
+
+
+@numba.njit(cache=True)
+def _ll_probit_tie(x: float, margin: float) -> float:
+    x = -abs(x)
+    z = logphi(x + margin)[0]
+    a = logphi(x - margin)[0] - z
+    if a > -0.693:
+        return z + log(-expm1(a))
+    return z + log1p(-exp(a))
+
+
+@numba.njit(cache=True)
+def _ll_logit_win(x: float, margin: float) -> float:
+    z = x - margin
+    if z > 0:
+        return -log1p(exp(-z))
+    return z - log1p(exp(z))
+
+
+@numba.njit(cache=True)
+def _ll_logit_tie(x: float, margin: float) -> float:
+    return _ll_logit_win(x, margin) + _ll_logit_win(-x, margin) + log(expm1(2 * margin))
+
+
+@numba.njit(cache=True)
+def eval_ll(kind: int, x: float, p1: float, p2: float, p3: float) -> float:
+    if kind == K_PROBIT_WIN:
+        margin = p1
+        return logphi(x - margin)[0]
+    if kind == K_PROBIT_TIE:
+        margin = p1
+        return _ll_probit_tie(x, margin)
+    if kind == K_LOGIT_WIN:
+        margin = p1
+        return _ll_logit_win(x, margin)
+    if kind == K_LOGIT_TIE:
+        margin = p1
+        return _ll_logit_tie(x, margin)
+    if kind == K_POISSON:
+        count = int(p1)
+        log_fact = p2
+        return x * count - log_fact - exp(x)
+    if kind == K_SKELLAM:
+        diff = int(p1)
+        base = p2
+        log_iv_const = p3
+        return -(base * exp(x) + base * exp(-x)) + x * diff + log_iv_const
+    if kind == K_GAUSSIAN:
+        diff = p1
+        var_obs = p2
+        return -0.5 * (log(2.0 * pi * var_obs) + (diff - x) * (diff - x) / var_obs)
+    return -1e300
+
+
+@numba.njit(cache=True)
+def gh_match_moments_weighted(
+    mean: float,
+    var: float,
+    weight: float,
+    kind: int,
+    p1: float,
+    p2: float,
+    p3: float,
+) -> tuple[float, float, float]:
+    if var < 1e-12:
+        var = 1e-12
+    std = sqrt(var)
+
+    max_lt = -1e308
+    lts = np.empty(_GH_N, dtype=np.float64)
+    xs_val = np.empty(_GH_N, dtype=np.float64)
+
+    for i in range(_GH_N):
+        x = mean + std * _GH_XS[i]
+        xs_val[i] = x
+        ll = eval_ll(kind, x, p1, p2, p3)
+        lt = _GH_LWS[i] + weight * ll
+        lts[i] = lt
+        if lt > max_lt:
+            max_lt = lt
+
+    s = 0.0
+    for i in range(_GH_N):
+        s += np.exp(lts[i] - max_lt)
+    logZ = max_lt + log(s)
+
+    m_tilt = 0.0
+    m2_tilt = 0.0
+    for i in range(_GH_N):
+        wi = np.exp(lts[i] - logZ)
+        x = xs_val[i]
+        m_tilt += wi * x
+        m2_tilt += wi * x * x
+    v_tilt = m2_tilt - m_tilt * m_tilt
+
+    dlogZ = (m_tilt - mean) / var
+    d2logZ = v_tilt / (var * var) - 1.0 / var
+    return logZ, dlogZ, d2logZ

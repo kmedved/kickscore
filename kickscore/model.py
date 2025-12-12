@@ -128,11 +128,12 @@ class BinaryModel(Model):
         winners: dict[str, Any] | list[str],
         losers: dict[str, Any] | list[str],
         t: float,
+        weight: float = 1.0,
     ) -> None:
         if t < self.last_t:
             raise ValueError("observations must be added in chronological order")
         elems = self.process_items(winners, sign=+1) + self.process_items(losers, sign=-1)
-        obs = self._win_obs(elems, t=t)
+        obs = self._win_obs(elems, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
 
@@ -167,6 +168,7 @@ class TernaryModel(Model):
         t: float,
         tie: bool = False,
         margin: float | None = None,
+        weight: float = 1.0,
     ) -> None:
         if t < self.last_t:
             raise ValueError("observations must be added in chronological order")
@@ -174,9 +176,9 @@ class TernaryModel(Model):
             margin = self.margin
         elems = self.process_items(winners, sign=+1) + self.process_items(losers, sign=-1)
         if tie:
-            obs = self._tie_obs(elems, t=t, margin=margin)
+            obs = self._tie_obs(elems, t=t, margin=margin, weight=weight)
         else:
-            obs = self._win_obs(elems, t=t, margin=margin)
+            obs = self._win_obs(elems, t=t, margin=margin, weight=weight)
         self.observations.append(obs)
         self.last_t = t
 
@@ -207,13 +209,14 @@ class DifferenceModel(Model):
         diff: float,
         var: float | None = None,
         t: float = 0.0,
+        weight: float = 1.0,
     ) -> None:
         if t < self.last_t:
             raise ValueError("observations must be added in chronological order")
         if var is None:
             var = self.var
         items = self.process_items(items1, sign=+1) + self.process_items(items2, sign=-1)
-        obs = GaussianObservation(items, diff, var, t=t)
+        obs = GaussianObservation(items, diff, var, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
 
@@ -239,12 +242,13 @@ class CountModel(Model):
         items2: dict[str, Any] | list[str],
         count: int,
         t: float = 0.0,
+        weight: float = 1.0,
     ) -> None:
         assert isinstance(count, int) and count >= 0
         if t < self.last_t:
             raise ValueError("observations must be added in chronological order")
         items = self.process_items(items1, sign=+1) + self.process_items(items2, sign=-1)
-        obs = PoissonObservation(items, count, t=t)
+        obs = PoissonObservation(items, count, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
 
@@ -272,11 +276,12 @@ class CountDiffModel(Model):
         items2: dict[str, Any] | list[str],
         diff: int,
         t: float = 0.0,
+        weight: float = 1.0,
     ) -> None:
         if t < self.last_t:
             raise ValueError("observations must be added in chronological order")
         items = self.process_items(items1, sign=+1) + self.process_items(items2, sign=-1)
-        obs = SkellamObservation(items, diff, self._base_rate, t=t)
+        obs = SkellamObservation(items, diff, self._base_rate, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
 

@@ -9,8 +9,11 @@ from ..item import Item
 
 
 class Observation(metaclass=abc.ABCMeta):
-    def __init__(self, elems: Sequence[tuple[Item, float]], t: float):
+    def __init__(self, elems: Sequence[tuple[Item, float]], t: float, weight: float = 1.0):
         assert len(elems) > 0, "need at least one item per observation"
+        if not (weight > 0.0):
+            raise ValueError(f"weight must be > 0, got {weight}")
+        self.weight = float(weight)
         self._M = len(elems)
         self._items = np.zeros(self._M, dtype=object)
         self._coeffs = np.zeros(self._M, dtype=float)
@@ -88,6 +91,10 @@ class Observation(metaclass=abc.ABCMeta):
             f_var += coeff * coeff * item.fitter.vs[idx]
         # Compute the derivatives of the exp. log-lik. w.r.t. mean parameters.
         exp_ll, alpha, beta = self.cvi_expectations(f_mean, f_var)
+        w = self.weight
+        exp_ll *= w
+        alpha *= w
+        beta *= w
         for i in range(self._M):
             item = self._items[i]
             idx = self._indices[i]
