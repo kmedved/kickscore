@@ -6,7 +6,19 @@ import numpy as np
 
 from ..item import Item
 from .observation import Observation
-from .utils import cvi_expectations, logphi, logsumexp2, match_moments, normcdf, normpdf
+from .utils import (
+    K_LOGIT_TIE,
+    K_LOGIT_WIN,
+    K_PROBIT_TIE,
+    K_PROBIT_WIN,
+    cvi_expectations,
+    gh_match_moments_weighted,
+    logphi,
+    logsumexp2,
+    match_moments,
+    normcdf,
+    normpdf,
+)
 
 
 @numba.jit(nopython=True)
@@ -27,12 +39,24 @@ def _ll_probit_win(x: float, margin: float) -> float:
 
 
 class ProbitWinObservation(Observation):
-    def __init__(self, elems: Sequence[tuple[Item, float]], t: float, margin: float = 0):
-        super().__init__(elems, t)
+    def __init__(
+        self, elems: Sequence[tuple[Item, float]], t: float, margin: float = 0, weight: float = 1.0
+    ):
+        super().__init__(elems, t, weight=weight)
         self._margin = margin
 
     def match_moments(self, mean_cav: float, var_cav: float) -> tuple[float, float, float]:
-        return _mm_probit_win(mean_cav - self._margin, var_cav)
+        if self.weight == 1.0:
+            return _mm_probit_win(mean_cav - self._margin, var_cav)
+        return gh_match_moments_weighted(
+            mean=mean_cav,
+            var=var_cav,
+            weight=self.weight,
+            kind=K_PROBIT_WIN,
+            p1=self._margin,
+            p2=0.0,
+            p3=0.0,
+        )
 
     def cvi_expectations(self, mean: float, var: float) -> tuple[float, float, float]:
         return _ll_probit_win.cvi_expectations(mean, var, self._margin)  # pyright: ignore[reportFunctionMemberAccess]
@@ -76,12 +100,24 @@ def _ll_probit_tie(x: float, margin: float) -> float:
 
 
 class ProbitTieObservation(Observation):
-    def __init__(self, elems: Sequence[tuple[Item, float]], t: float, margin: float):
-        super().__init__(elems, t)
+    def __init__(
+        self, elems: Sequence[tuple[Item, float]], t: float, margin: float, weight: float = 1.0
+    ):
+        super().__init__(elems, t, weight=weight)
         self._margin = margin
 
     def match_moments(self, mean_cav: float, var_cav: float) -> tuple[float, float, float]:
-        return _mm_probit_tie(mean_cav, var_cav, self._margin)
+        if self.weight == 1.0:
+            return _mm_probit_tie(mean_cav, var_cav, self._margin)
+        return gh_match_moments_weighted(
+            mean=mean_cav,
+            var=var_cav,
+            weight=self.weight,
+            kind=K_PROBIT_TIE,
+            p1=self._margin,
+            p2=0.0,
+            p3=0.0,
+        )
 
     def cvi_expectations(self, mean: float, var: float) -> tuple[float, float, float]:
         return _ll_probit_tie.cvi_expectations(mean, var, self._margin)  # pyright: ignore[reportFunctionMemberAccess]
@@ -149,12 +185,24 @@ def _ll_logit_win(x: float, margin: float) -> float:
 
 
 class LogitWinObservation(Observation):
-    def __init__(self, elems: Sequence[tuple[Item, float]], t: float, margin: float = 0):
-        super().__init__(elems, t)
+    def __init__(
+        self, elems: Sequence[tuple[Item, float]], t: float, margin: float = 0, weight: float = 1.0
+    ):
+        super().__init__(elems, t, weight=weight)
         self._margin = margin
 
     def match_moments(self, mean_cav: float, var_cav: float) -> tuple[float, float, float]:
-        return _mm_logit_win(mean_cav - self._margin, var_cav)
+        if self.weight == 1.0:
+            return _mm_logit_win(mean_cav - self._margin, var_cav)
+        return gh_match_moments_weighted(
+            mean=mean_cav,
+            var=var_cav,
+            weight=self.weight,
+            kind=K_LOGIT_WIN,
+            p1=self._margin,
+            p2=0.0,
+            p3=0.0,
+        )
 
     def cvi_expectations(self, mean: float, var: float) -> tuple[float, float, float]:
         return _ll_logit_win.cvi_expectations(mean, var, self._margin)  # pyright: ignore[reportFunctionMemberAccess]
@@ -175,12 +223,24 @@ def _ll_logit_tie(x: float, margin: float) -> float:
 
 
 class LogitTieObservation(Observation):
-    def __init__(self, elems: Sequence[tuple[Item, float]], t: float, margin: float = 0):
-        super().__init__(elems, t)
+    def __init__(
+        self, elems: Sequence[tuple[Item, float]], t: float, margin: float = 0, weight: float = 1.0
+    ):
+        super().__init__(elems, t, weight=weight)
         self._margin = margin
 
     def match_moments(self, mean_cav: float, var_cav: float) -> tuple[float, float, float]:
-        return _ll_logit_tie.match_moments(mean_cav, var_cav, self._margin)  # pyright: ignore[reportFunctionMemberAccess]
+        if self.weight == 1.0:
+            return _ll_logit_tie.match_moments(mean_cav, var_cav, self._margin)  # pyright: ignore[reportFunctionMemberAccess]
+        return gh_match_moments_weighted(
+            mean=mean_cav,
+            var=var_cav,
+            weight=self.weight,
+            kind=K_LOGIT_TIE,
+            p1=self._margin,
+            p2=0.0,
+            p3=0.0,
+        )
 
     def cvi_expectations(self, mean: float, var: float) -> tuple[float, float, float]:
         return _ll_logit_tie.cvi_expectations(mean, var, self._margin)  # pyright: ignore[reportFunctionMemberAccess]

@@ -68,15 +68,11 @@ class Kernel(metaclass=abc.ABCMeta):
         # - <https://github.com/SheffieldML/GPy/blob/devel/GPy/models/state_space.py#L715>
         # - Särkka's thesis (2006).
         mat = self.noise_effect.dot(self.noise_density).dot(self.noise_effect.T)
-        # print(g)
-        print(mat)
         Phi = np.vstack(
             (np.hstack((self.feedback, mat)), np.hstack((np.zeros_like(mat), -self.feedback.T)))
         )
-        print(Phi)
         m = self.order
         AB = np.dot(sp.linalg.expm(Phi * (t2 - t1)), np.eye(2 * m, m, k=-m))
-        print(AB)
         return sp.linalg.solve(AB[m:, :].T, AB[:m, :].T)
 
     def __add__(self, other: "Kernel") -> "Kernel":
