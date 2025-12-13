@@ -30,15 +30,18 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "numpy",
-    "scipy",
-    "numba",
+    "numpy>=1.23",
+    "scipy>=1.10",
+    "numba>=0.57",
 ]
 
 [project.optional-dependencies]
 all = [
     "matplotlib",
     "notebook",
+]
+test = [
+    "pytest>=7",
 ]
 
 [project.urls]
