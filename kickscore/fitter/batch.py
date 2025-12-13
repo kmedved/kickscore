@@ -18,6 +18,8 @@ class BatchFitter(Fitter):
 
     def allocate(self) -> None:
         """Overrides `Fitter.allocate` to compute the kernel matrix."""
+        if len(self.ts_new) == 0:
+            return
         super().allocate()
         self._k_mat = self.kernel.k_mat(self.ts)
 
@@ -36,8 +38,8 @@ class BatchFitter(Fitter):
         w_inv = np.transpose(mat).dot(mat)
         # Recompute mean and covariance.
         cov = self._k_mat - self._k_mat.dot(w_inv).dot(self._k_mat)
-        self.ms = np.dot(cov, self.ns)
-        self.vs = np.diag(cov)
+        self.ms[:] = np.dot(cov, self.ns)
+        self.vs[:] = np.diag(cov)
         # Store some quantities for prediction and marginal likelihood).
         self._cov = cov
         self._b_cholesky = b_cho

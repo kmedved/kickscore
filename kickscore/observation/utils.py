@@ -276,3 +276,30 @@ def gh_match_moments_weighted(
     dlogZ = (m_tilt - mean) / var
     d2logZ = v_tilt / (var * var) - 1.0 / var
     return logZ, dlogZ, d2logZ
+
+
+@numba.njit(cache=True)
+def gh_cvi_expectations(
+    mean: float,
+    var: float,
+    kind: int,
+    p1: float,
+    p2: float,
+    p3: float,
+) -> tuple[float, float, float]:
+    if var <= 0.0:
+        var = 1e-12
+    std = sqrt(var)
+
+    exp_ll = 0.0
+    alpha = 0.0
+    beta = 0.0
+
+    for i in range(_GH_N):
+        x = mean + std * _GH_XS[i]
+        val = (_GH_WS[i] / SQRT2PI) * eval_ll(kind, x, p1, p2, p3)
+        exp_ll += val
+        alpha += (_GH_XS[i] / std) * val
+        beta += ((_GH_XS[i] * _GH_XS[i] - 1.0) / (2.0 * var)) * val
+
+    return exp_ll, alpha, beta
