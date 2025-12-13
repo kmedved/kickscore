@@ -29,6 +29,8 @@ class Fitter(metaclass=abc.ABCMeta):
 
     def allocate(self) -> None:
         n_new = len(self.ts_new)
+        if n_new == 0:
+            return
         zeros = np.zeros(n_new)
         self.ts = np.concatenate((self.ts, self.ts_new))
         self.ms = np.concatenate((self.ms, zeros))

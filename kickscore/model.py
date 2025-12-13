@@ -2,6 +2,8 @@ import abc
 from collections.abc import Sequence
 from typing import Any, Literal
 
+import numpy as np
+
 from .item import Item
 from .kernel import Kernel
 from .observation import (
@@ -22,6 +24,8 @@ class Model(metaclass=abc.ABCMeta):
         self.last_t: float = -float("inf")
         self.observations: list[Observation] = list()
         self._last_method: Literal["ep", "kl"] | None = None  # Last method used to fit the model.
+        self._obs_ll_cache: np.ndarray | None = None
+        self._obs_ll_cache_method: Literal["ep", "kl"] | None = None
 
     @property
     def item(self) -> dict[str, Item]:
@@ -36,6 +40,8 @@ class Model(metaclass=abc.ABCMeta):
         if name in self._item:
             raise ValueError("item '{}' already added".format(name))
         self._item[name] = Item(kernel=kernel, fitter=fitter)
+        self._obs_ll_cache = None
+        self._obs_ll_cache_method = None
 
     @abc.abstractmethod
     def observe(self, *args: Any, **kwargs: Any) -> None:
@@ -48,30 +54,66 @@ class Model(metaclass=abc.ABCMeta):
         tol: float = 1e-3,
         max_iter: int = 100,
         verbose: bool = False,
+        backend: Literal["python", "numba"] = "python",
     ) -> bool:
-        if method == "ep":
-            update = lambda obs: obs.ep_update(lr=lr)
-        elif method == "kl":
-            update = lambda obs: obs.kl_update(lr=lr)
-        else:
+        if method not in ("ep", "kl"):
             raise ValueError("'method' should be one of: 'ep', 'kl'")
+        if backend not in ("python", "numba"):
+            raise ValueError("'backend' should be one of: 'python', 'numba'")
+
         self._last_method = method
+        self._obs_ll_cache = None
+        self._obs_ll_cache_method = None
         for item in self._item.values():
             item.fitter.allocate()
+
+        if backend == "numba" and len(self.observations) == 0:
+            for item in self._item.values():
+                item.fitter.fit()
+            self._obs_ll_cache = np.zeros(0, dtype=np.float64)
+            self._obs_ll_cache_method = method
+            return True
+
+        if backend == "python":
+            if method == "ep":
+                update = lambda obs: obs.ep_update(lr=lr)
+            else:  # method == "kl"
+                update = lambda obs: obs.kl_update(lr=lr)
+            for i in range(max_iter):
+                max_diff = 0.0
+                # Recompute the Gaussian pseudo-observations.
+                for obs in self.observations:
+                    diff = update(obs)
+                    max_diff = max(max_diff, diff)
+                # Recompute the posterior of the score processes.
+                for item in self.item.values():
+                    item.fitter.fit()
+                if verbose:
+                    print("iteration {}, max diff: {:.5f}".format(i + 1, max_diff), flush=True)
+                if max_diff < tol:
+                    return True
+            return False  # Did not converge after `max_iter`.
+
+        from .fastfit import build_array_lists, ep_sweep, kl_sweep, pack_observations
+
+        packed, items = pack_observations(self.observations)
+        arrays = build_array_lists(items)
+        sweep = ep_sweep if method == "ep" else kl_sweep
+
         for i in range(max_iter):
-            max_diff = 0.0
-            # Recompute the Gaussian pseudo-observations.
-            for obs in self.observations:
-                diff = update(obs)
-                max_diff = max(max_diff, diff)
-            # Recompute the posterior of the score processes.
-            for item in self.item.values():
+            max_diff = sweep(packed, arrays, lr)
+            for item in items:
                 item.fitter.fit()
             if verbose:
                 print("iteration {}, max diff: {:.5f}".format(i + 1, max_diff), flush=True)
             if max_diff < tol:
+                self._obs_ll_cache = packed.obs_ll.copy()
+                self._obs_ll_cache_method = method
                 return True
-        return False  # Did not converge after `max_iter`.
+
+        self._obs_ll_cache = packed.obs_ll.copy()
+        self._obs_ll_cache_method = method
+        return False
 
     @abc.abstractmethod
     def probabilities(self, *args: Any, **kwargs: Any) -> Any:
@@ -84,9 +126,13 @@ class Model(metaclass=abc.ABCMeta):
             contrib = lambda x: x.ep_log_likelihood_contrib
         else:  # self._last_method == "kl"
             contrib = lambda x: x.kl_log_likelihood_contrib
-        return sum(contrib(o) for o in self.observations) + sum(
-            contrib(i.fitter) for i in self.item.values()
-        )
+
+        if self._obs_ll_cache is not None and self._obs_ll_cache_method == self._last_method:
+            obs_contrib = float(self._obs_ll_cache.sum())
+        else:
+            obs_contrib = sum(contrib(o) for o in self.observations)
+
+        return obs_contrib + sum(contrib(i.fitter) for i in self.item.values())
 
     def process_items(
         self,
@@ -136,6 +182,8 @@ class BinaryModel(Model):
         obs = self._win_obs(elems, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
+        self._obs_ll_cache = None
+        self._obs_ll_cache_method = None
 
     def probabilities(
         self,
@@ -181,6 +229,8 @@ class TernaryModel(Model):
             obs = self._win_obs(elems, t=t, margin=margin, weight=weight)
         self.observations.append(obs)
         self.last_t = t
+        self._obs_ll_cache = None
+        self._obs_ll_cache_method = None
 
     def probabilities(
         self,
@@ -219,6 +269,8 @@ class DifferenceModel(Model):
         obs = GaussianObservation(items, diff, var, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
+        self._obs_ll_cache = None
+        self._obs_ll_cache_method = None
 
     def probabilities(
         self,
@@ -251,6 +303,8 @@ class CountModel(Model):
         obs = PoissonObservation(items, count, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
+        self._obs_ll_cache = None
+        self._obs_ll_cache_method = None
 
     def probabilities(
         self,
@@ -284,6 +338,8 @@ class CountDiffModel(Model):
         obs = SkellamObservation(items, diff, self._base_rate, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
+        self._obs_ll_cache = None
+        self._obs_ll_cache_method = None
 
     def probabilities(
         self,
