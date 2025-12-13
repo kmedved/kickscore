@@ -23,8 +23,7 @@ from .observation.ordinal import (
     _mm_probit_tie,
     _mm_probit_win,
 )
-from .observation.poisson import PoissonObservation
-from .observation.skellam import SkellamObservation
+from .observation.poisson import PoissonObservation, SkellamObservation
 from .observation.utils import (
     K_GAUSSIAN,
     K_LOGIT_TIE,
