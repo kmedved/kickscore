@@ -28,7 +28,7 @@ class Model(metaclass=abc.ABCMeta):
         self._obs_ll_cache: np.ndarray | None = None
         self._obs_ll_cache_method: Literal["ep", "kl"] | None = None
         self._packed_cache = None
-        self._packed_cache_items: list[Item] | None = None
+        self._packed_cache_items = None
         self._packed_cache_arrays = None
 
     @property
@@ -68,6 +68,19 @@ class Model(metaclass=abc.ABCMeta):
             raise ValueError("item '{}' already added".format(name))
         self._item[name] = Item(kernel=kernel, fitter=fitter)
         self._invalidate_caches()
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_packed_cache"] = None
+        state["_packed_cache_items"] = None
+        state["_packed_cache_arrays"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._packed_cache = None
+        self._packed_cache_items = None
+        self._packed_cache_arrays = None
 
     @abc.abstractmethod
     def observe(self, *args: Any, **kwargs: Any) -> None:
