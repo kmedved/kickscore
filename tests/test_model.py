@@ -78,3 +78,23 @@ def test_saving():
     assert model2.item.keys() == model.item.keys()
     for obs, obs2 in zip(model.observations, model2.observations):
         assert obs.t == obs2.t
+
+
+def test_pickling_after_numba_fit():
+    kernel = ks.kernel.Constant(1.0)
+    model = ks.BinaryModel()
+    model.add_item("a", kernel)
+    model.add_item("b", kernel)
+    model.observe(winners=["a"], losers=["b"], t=0.0)
+    model.observe(winners=["b"], losers=["a"], t=1.0)
+
+    assert model.fit(backend="numba", method="kl", max_iter=50, tol=1e-4)
+
+    data = pickle.dumps(model)
+    restored = pickle.loads(data)
+
+    assert restored.item.keys() == model.item.keys()
+    assert restored._packed_cache is None
+    assert restored._packed_cache_items is None
+    assert restored._packed_cache_arrays is None
+    assert np.isfinite(restored.log_likelihood)
