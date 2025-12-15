@@ -4,6 +4,7 @@ from typing import Any, Literal
 
 import numpy as np
 
+from .fitter.recursive import RecursiveFitter
 from .item import Item
 from .kernel import Kernel
 from .observation import (
@@ -34,6 +35,29 @@ class Model(metaclass=abc.ABCMeta):
     def item(self) -> dict[str, Item]:
         return self._item
 
+    def _invalidate_caches(self) -> None:
+        self._obs_ll_cache = None
+        self._obs_ll_cache_method = None
+        self._packed_cache = None
+        self._packed_cache_items = None
+        self._packed_cache_arrays = None
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state["_packed_cache"] = None
+        state["_packed_cache_items"] = None
+        state["_packed_cache_arrays"] = None
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        if "_packed_cache" not in self.__dict__:
+            self._packed_cache = None
+        if "_packed_cache_items" not in self.__dict__:
+            self._packed_cache_items = None
+        if "_packed_cache_arrays" not in self.__dict__:
+            self._packed_cache_arrays = None
+
     def add_item(
         self,
         name: str,
@@ -43,8 +67,7 @@ class Model(metaclass=abc.ABCMeta):
         if name in self._item:
             raise ValueError("item '{}' already added".format(name))
         self._item[name] = Item(kernel=kernel, fitter=fitter)
-        self._obs_ll_cache = None
-        self._obs_ll_cache_method = None
+        self._invalidate_caches()
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -110,26 +133,61 @@ class Model(metaclass=abc.ABCMeta):
                     return True
             return False  # Did not converge after `max_iter`.
 
-        from .fastfit import build_array_lists, ep_sweep, kl_sweep, pack_observations
+        from .fastfit import (
+            build_array_lists,
+            build_recursive_lists,
+            ep_compute_obs_ll,
+            ep_sweep,
+            fit_all_recursive_items,
+            kl_sweep,
+            pack_observations,
+        )
 
-        packed, items = pack_observations(self.observations)
-        arrays = build_array_lists(items)
+        if (
+            self._packed_cache is not None
+            and self._packed_cache_items is not None
+            and self._packed_cache_arrays is not None
+        ):
+            packed = self._packed_cache
+            items = self._packed_cache_items
+            arrays = self._packed_cache_arrays
+        else:
+            packed, items = pack_observations(self.observations)
+            arrays = build_array_lists(items)
+            self._packed_cache = packed
+            self._packed_cache_items = items
+            self._packed_cache_arrays = arrays
+
         sweep = ep_sweep if method == "ep" else kl_sweep
+
+        recursive_only = all(isinstance(item.fitter, RecursiveFitter) for item in items)
+        recursive_arrays = build_recursive_lists(items) if recursive_only else None
+
+        success = False
 
         for i in range(max_iter):
             max_diff = sweep(packed, arrays, lr)
-            for item in items:
-                item.fitter.fit()
+            if recursive_only:
+                fit_all_recursive_items(recursive_arrays)
+            else:
+                for item in items:
+                    item.fitter.fit()
             if verbose:
                 print("iteration {}, max diff: {:.5f}".format(i + 1, max_diff), flush=True)
             if max_diff < tol:
-                self._obs_ll_cache = packed.obs_ll.copy()
-                self._obs_ll_cache_method = method
-                return True
+                success = True
+                break
+
+        if recursive_only:
+            for item in items:
+                item.fitter.is_fitted = True
+
+        if method == "ep":
+            ep_compute_obs_ll(packed, arrays)
 
         self._obs_ll_cache = packed.obs_ll.copy()
         self._obs_ll_cache_method = method
-        return False
+        return success
 
     @abc.abstractmethod
     def probabilities(self, *args: Any, **kwargs: Any) -> Any:
@@ -198,8 +256,7 @@ class BinaryModel(Model):
         obs = self._win_obs(elems, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
-        self._obs_ll_cache = None
-        self._obs_ll_cache_method = None
+        self._invalidate_caches()
 
     def probabilities(
         self,
@@ -245,8 +302,7 @@ class TernaryModel(Model):
             obs = self._win_obs(elems, t=t, margin=margin, weight=weight)
         self.observations.append(obs)
         self.last_t = t
-        self._obs_ll_cache = None
-        self._obs_ll_cache_method = None
+        self._invalidate_caches()
 
     def probabilities(
         self,
@@ -285,8 +341,7 @@ class DifferenceModel(Model):
         obs = GaussianObservation(items, diff, var, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
-        self._obs_ll_cache = None
-        self._obs_ll_cache_method = None
+        self._invalidate_caches()
 
     def probabilities(
         self,
@@ -319,8 +374,7 @@ class CountModel(Model):
         obs = PoissonObservation(items, count, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
-        self._obs_ll_cache = None
-        self._obs_ll_cache_method = None
+        self._invalidate_caches()
 
     def probabilities(
         self,
@@ -354,8 +408,7 @@ class CountDiffModel(Model):
         obs = SkellamObservation(items, diff, self._base_rate, t=t, weight=weight)
         self.observations.append(obs)
         self.last_t = t
-        self._obs_ll_cache = None
-        self._obs_ll_cache_method = None
+        self._invalidate_caches()
 
     def probabilities(
         self,
