@@ -7,6 +7,7 @@ import numba
 import numpy as np
 from numba.typed import List
 
+from .fitter.recursive import _fit as _kalman_fit
 from .item import Item
 from .observation.gaussian import (
     GaussianObservation,
@@ -23,8 +24,7 @@ from .observation.ordinal import (
     _mm_probit_tie,
     _mm_probit_win,
 )
-from .observation.poisson import PoissonObservation
-from .observation.skellam import SkellamObservation
+from .observation.poisson import PoissonObservation, SkellamObservation
 from .observation.utils import (
     K_GAUSSIAN,
     K_LOGIT_TIE,
@@ -160,6 +160,59 @@ def build_array_lists(items: Sequence[Item]):
     return ms_list, vs_list, ns_list, xs_list
 
 
+def build_recursive_lists(items: Sequence[Item]):
+    ts_list = List()
+    ms_list = List()
+    vs_list = List()
+    ns_list = List()
+    xs_list = List()
+    h_list = List()
+    I_list = List()
+    A_list = List()
+    Q_list = List()
+    m_p_list = List()
+    P_p_list = List()
+    m_f_list = List()
+    P_f_list = List()
+    m_s_list = List()
+    P_s_list = List()
+    for item in items:
+        fitter = item.fitter
+        ts_list.append(fitter.ts)
+        ms_list.append(fitter.ms)
+        vs_list.append(fitter.vs)
+        ns_list.append(fitter.ns)
+        xs_list.append(fitter.xs)
+        h_list.append(fitter._h)
+        I_list.append(fitter._I)
+        A_list.append(fitter._A)
+        Q_list.append(fitter._Q)
+        m_p_list.append(fitter._m_p)
+        P_p_list.append(fitter._P_p)
+        m_f_list.append(fitter._m_f)
+        P_f_list.append(fitter._P_f)
+        m_s_list.append(fitter._m_s)
+        P_s_list.append(fitter._P_s)
+
+    return (
+        ts_list,
+        ms_list,
+        vs_list,
+        ns_list,
+        xs_list,
+        h_list,
+        I_list,
+        A_list,
+        Q_list,
+        m_p_list,
+        P_p_list,
+        m_f_list,
+        P_f_list,
+        m_s_list,
+        P_s_list,
+    )
+
+
 @numba.njit(cache=True)
 def _ep_sweep(
     ptr,
@@ -178,7 +231,6 @@ def _ep_sweep(
     edge_x_cav,
     edge_n_cav,
     logpart,
-    obs_ll,
     lr,
 ):
     max_diff = 0.0
@@ -236,7 +288,26 @@ def _ep_sweep(
         max_diff = max(max_diff, abs(current_logpart - logpart_new))
         logpart[i] = logpart_new
 
-        loglik = logpart_new
+    return max_diff
+
+
+@numba.njit(cache=True)
+def _ep_compute_obs_ll(
+    ptr,
+    edge_item,
+    edge_idx,
+    logpart,
+    edge_x_cav,
+    edge_n_cav,
+    xs_list,
+    ns_list,
+    out,
+):
+    n_obs = len(logpart)
+    for i in range(n_obs):
+        start = ptr[i]
+        end = ptr[i + 1]
+        loglik = logpart[i]
         for j in range(start, end):
             item_id = edge_item[j]
             idx = edge_idx[j]
@@ -247,8 +318,7 @@ def _ep_sweep(
             loglik += 0.5 * log(x / x_cav + 1.0) + (
                 (-(n * n)) - 2.0 * n * n_cav + x * n_cav * n_cav / x_cav
             ) / (2.0 * (x + x_cav))
-        obs_ll[i] = loglik
-    return max_diff
+        out[i] = loglik
 
 
 @numba.njit(cache=True)
@@ -329,7 +399,6 @@ def ep_sweep(packed: PackedObservations, arrays, lr: float) -> float:
         packed.edge_x_cav,
         packed.edge_n_cav,
         packed.logpart,
-        packed.obs_ll,
         lr,
     )
 
@@ -354,3 +423,64 @@ def kl_sweep(packed: PackedObservations, arrays, lr: float) -> float:
         packed.obs_ll,
         lr,
     )
+
+
+def ep_compute_obs_ll(packed: PackedObservations, arrays) -> None:
+    _, _, ns_list, xs_list = arrays
+    _ep_compute_obs_ll(
+        packed.ptr,
+        packed.edge_item,
+        packed.edge_idx,
+        packed.logpart,
+        packed.edge_x_cav,
+        packed.edge_n_cav,
+        xs_list,
+        ns_list,
+        packed.obs_ll,
+    )
+
+
+@numba.njit(cache=True, parallel=True)
+def _fit_all_recursive(
+    ts_list,
+    ms_list,
+    vs_list,
+    ns_list,
+    xs_list,
+    h_list,
+    I_list,
+    A_list,
+    Q_list,
+    m_p_list,
+    P_p_list,
+    m_f_list,
+    P_f_list,
+    m_s_list,
+    P_s_list,
+):
+    n = len(ts_list)
+    for i in numba.prange(n):
+        n_obs = int(ts_list[i].size)
+        if n_obs == 0:
+            continue
+        _kalman_fit(
+            ts_list[i],
+            ms_list[i],
+            vs_list[i],
+            ns_list[i],
+            xs_list[i],
+            h_list[i],
+            I_list[i],
+            A_list[i],
+            Q_list[i],
+            m_p_list[i],
+            P_p_list[i],
+            m_f_list[i],
+            P_f_list[i],
+            m_s_list[i],
+            P_s_list[i],
+        )
+
+
+def fit_all_recursive_items(recursive_arrays) -> None:
+    _fit_all_recursive(*recursive_arrays)
